@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>Mini Obsidian - Sticky Notes Markdown Edition</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    body { 
+      margin: 0; overflow: hidden; font-family: sans-serif; background: #111; 
+      height: 100vh; width: 100vw; position: relative; 
+    }
+    
+    #canvas {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      transform-origin: 0 0; will-change: transform;
+    }
+
+    .node { 
+      position: absolute; 
+      min-width: 180px; min-height: 100px; 
+      padding: 15px; 
+      background: #222; 
+      background-image: linear-gradient(#333 1px, transparent 1px);
+      background-size: 100% 1.5em; 
+      line-height: 1.5em; color: #fff; 
+      border: 1px solid #444; border-radius: 2px; cursor: move; user-select: none; 
+      z-index: 2; box-shadow: 3px 3px 10px rgba(0,0,0,0.5); 
+      overflow: visible; 
+      resize: both;
+      display: block; 
+      box-sizing: border-box;
+    }
+
+    /* 単語モード用スタイル */
+    .node.word-mode {
+      background-image: none !important;
+      min-width: auto; min-height: auto;
+      width: fit-content !important;
+      height: fit-content !important;
+      padding: 5px 15px;
+      display: flex; align-items: center; justify-content: center;
+      text-align: center; white-space: nowrap; border-color: #555;
+    }
+
+    /* Markdown表示用 */
+    .node ul, .node ol { padding-left: 20px; margin: 5px 0; }
+    .node p { margin: 0; }
+    .node h1, .node h2, .node h3 { margin: 5px 0; font-size: 1.1em; color: #ffa500; }
+
+    /* 編集モード */
+    .node[contenteditable="true"] { 
+      white-space: pre-wrap; background-image: none !important; 
+      background-color: #282828; outline: 1px solid #ffa500; 
+      font-size: 14px !important; min-width: 200px; overflow: auto;
+    }
+
+    .node.selected { border: 2px solid #ffa500; box-shadow: 0 0 15px rgba(255, 165, 0, 0.3); }
+
+    svg { position: absolute; top: 0; left: 0; width: 10000px; height: 10000px; pointer-events: none; z-index: 1; }
+    
+    #toolbar { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); background: #333; padding: 6px; border-radius: 5px; display: none; z-index: 100; border: 1px solid #555; }
+    .tool-btn { background: #444; border: 1px solid #666; color: white; padding: 4px 8px; margin: 0 2px; cursor: pointer; border-radius: 3px; font-size: 11px; }
+    
+    #selector { position: absolute; border: 1px solid #ffa500; background: rgba(255, 165, 0, 0.1); pointer-events: none; display: none; z-index: 99; }
+    
+    #help-panel { position: fixed; bottom: 20px; right: 20px; background: rgba(40, 40, 40, 0.95); color: #ddd; padding: 15px; border-radius: 8px; border: 1px solid #555; font-size: 12px; z-index: 100; box-shadow: 0 4px 15px rgba(0,0,0,0.5); line-height: 1.6; }
+    .export-btn { width: 100%; background: #ffa500; color: #000; border: none; padding: 8px; border-radius: 4px; font-weight: bold; cursor: pointer; margin-bottom: 12px; }
+    .key { background: #555; padding: 1px 4px; border-radius: 3px; color: #fff; font-family: monospace; font-size: 11px; }
+
+    #context-menu {
+      position: fixed; display: none; background: #333; border: 1px solid #555;
+      color: white; z-index: 1000; box-shadow: 5px 5px 15px rgba(0,0,0,0.5);
+      border-radius: 4px; padding: 5px 0; min-width: 140px;
+    }
+    .menu-item { padding: 8px 15px; cursor: pointer; font-size: 12px; display: flex; align-items: center; justify-content: space-between; }
+    .menu-item:hover { background: #444; color: #ffa500; }
+    .size-controls { display: flex; gap: 5px; }
+    .size-btn { background: #555; border: none; color: white; padding: 2px 8px; border-radius: 3px; cursor: pointer; font-weight: bold; }
+  </style>
+</head>
+<body>
+
+<div id="toolbar">
+  <button class="tool-btn" onclick="alignNodes('left')">左揃え</button>
+  <button class="tool-btn" onclick="alignNodes('center-h')">中央(縦)</button>
+  <button class="tool-btn" onclick="alignNodes('right')">右揃え</button>
+  <button class="tool-btn" onclick="alignNodes('dist-h')" style="color:#ffa500">等間隔(横)</button>
+  <span style="border-left:1px solid #555; margin:0 5px;"></span>
+  <button class="tool-btn" onclick="alignNodes('top')">上揃え</button>
+  <button class="tool-btn" onclick="alignNodes('center-v')">中央(横)</button>
+  <button class="tool-btn" onclick="alignNodes('bottom')">下揃え</button>
+  <button class="tool-btn" onclick="alignNodes('dist-v')" style="color:#ffa500">等間隔(縦)</button>
+</div>
+
+<div id="canvas">
+  <div id="selector"></div>
+  <svg id="lines"></svg>
+</div>
+
+<div id="context-menu">
+  <div class="menu-item" onclick="toggleWordMode()">単語/文章 切替</div>
+  <div class="menu-sep" style="border-bottom:1px solid #555; margin:5px 0;"></div>
+  <div class="menu-item" style="cursor: default;">
+    <span>文字サイズ</span>
+    <div class="size-controls">
+      <button class="size-btn" onmousedown="startFontSizeChange(-2)" onmouseup="stopFontSizeChange()" onmouseleave="stopFontSizeChange()">−</button>
+      <button class="size-btn" onmousedown="startFontSizeChange(2)" onmouseup="stopFontSizeChange()" onmouseleave="stopFontSizeChange()">＋</button>
+    </div>
+  </div>
+  <div class="menu-sep" style="border-bottom:1px solid #555; margin:5px 0;"></div>
+  <div class="menu-item" onclick="deleteSelectedNodes()" style="color:#ff6666;">削除</div>
+</div>
+
+<div id="help-panel">
+  <h3 style="margin:0 0 10px 0; font-size:14px; color:#ffa500;">操作ガイド <span style="cursor:pointer; float:right;" onclick="toggleHelp()">[×]</span></h3>
+  <button class="export-btn" onclick="exportAsImage()">画像として保存 (PNG)</button>
+  <div><span class="key">Click</span> : 選択 / <span class="key">Ctrl + Click</span> : 追加選択</div>
+  <div><span class="key">Wheel</span> : 画面移動 / <span class="key">Shift + Wheel</span> : 横移動</div>
+  <div><span class="key">Dbl Click</span> : 編集 / (背景)新規作成</div>
+  <div><span class="key">ドラッグ</span> : 移動 / <span class="key">右下ドラッグ</span> : リサイズ</div>
+  <div><span class="key">Alt + Click</span> : 接続 / <span class="key">Alt + 右Click</span> : 切断</div> 
+  <div><span class="key">Right Click</span> : ノード設定 / <span class="key">Del</span> : 削除</div>
+  <div><span class="key">S</span> : 後ろに挿入 / <span class="key">Shift + S</span> : 前に挿入</div>
+  <div><span class="key">Ctrl + Z / Y</span> : Undo / Redo</div>
+  <div><span class="key">H</span> : ヘルプ表示/非表示</div>
+</div>
+
+<script>
+let nodes = [];
+let edges = [];
+let selectedNodes = [];
+let offsetX = 0, offsetY = 0;
+let selecting = false, selX = 0, selY = 0;
+let menuTargetNode = null, sizeInterval = null;
+
+const canvas = document.getElementById("canvas");
+const svg = document.getElementById("lines");
+const toolbar = document.getElementById("toolbar");
+const selector = document.getElementById("selector");
+const helpPanel = document.getElementById("help-panel");
+const contextMenu = document.getElementById("context-menu");
+const history = []; 
+let historyIndex = -1;
+
+function toggleHelp() { helpPanel.style.display = (helpPanel.style.display === "none") ? "block" : "none"; }
+
+// パンニング
+window.addEventListener("wheel", e => {
+  if (selectedNodes.some(n => n.el.contentEditable === "true")) return;
+  if (e.shiftKey) offsetX -= e.deltaY;
+  else { offsetX -= e.deltaX; offsetY -= e.deltaY; }
+  updateCanvasTransform();
+  e.preventDefault();
+}, { passive: false });
+
+function updateCanvasTransform() { canvas.style.transform = `translate(${offsetX}px, ${offsetY}px)`; }
+
+// 状態管理
+function saveState() {
+  const state = JSON.stringify({
+    offsetX, offsetY,
+    nodes: nodes.map(n => ({ 
+      x: parseInt(n.el.style.left), y: parseInt(n.el.style.top), 
+      w: n.el.style.width, h: n.el.style.height, 
+      text: n.el.dataset.rawText,
+      fontSize: n.el.style.fontSize || "14px",
+      isWordMode: n.el.classList.contains("word-mode")
+    })),
+    edges: edges.map(e => ({ fromIdx: nodes.indexOf(e.from), toIdx: nodes.indexOf(e.to) }))
+  });
+  if (historyIndex < history.length - 1) history.splice(historyIndex + 1);
+  history.push(state); historyIndex++;
+  localStorage.setItem("mini_obsidian_data", state);
+}
+
+function loadState(stateStr) {
+  if (!stateStr) return;
+  const data = JSON.parse(stateStr);
+  offsetX = data.offsetX || 0; offsetY = data.offsetY || 0; updateCanvasTransform();
+  nodes.forEach(n => n.el.remove());
+  nodes = []; edges = []; selectedNodes = [];
+  data.nodes.forEach(n => {
+    const node = createNode(n.x + offsetX, n.y + offsetY, n.text, false);
+    node.el.style.width = n.w; node.el.style.height = n.h; node.el.style.fontSize = n.fontSize;
+    if (n.isWordMode) node.el.classList.add("word-mode");
+  });
+  data.edges.forEach(e => { if(nodes[e.fromIdx] && nodes[e.toIdx]) edges.push({ from: nodes[e.fromIdx], to: nodes[e.toIdx] }); });
+  updateToolbar(); redraw();
+}
+
+function createNode(x, y, text = "新規メモ", shouldSave = true) {
+  const div = document.createElement("div");
+  div.className = "node";
+  div.dataset.rawText = text;
+  div.innerHTML = marked.parse(text);
+  div.style.left = (x - offsetX) + "px"; 
+  div.style.top = (y - offsetY) + "px";
+  div.style.fontSize = "14px";
+  canvas.appendChild(div);
+  
+  const node = { el: div };
+  nodes.push(node);
+
+  let dragging = false, startOffsets = [];
+  new ResizeObserver(() => redraw()).observe(div);
+
+  div.addEventListener("mousedown", e => {
+    if (e.button === 2) {
+      if (e.altKey) { // Alt + 右クリックで接続削除
+        edges = edges.filter(edge => !(edge.from === node || edge.to === node));
+        saveState(); redraw(); e.preventDefault();
+      }
+      return;
+    }
+    const rect = div.getBoundingClientRect();
+    if (e.clientX > rect.right - 20 && e.clientY > rect.bottom - 20) return;
+    if (div.contentEditable === "true") return;
+    
+    e.stopPropagation();
+    
+    if (e.altKey && selectedNodes.length === 1 && selectedNodes[0] !== node) {
+      if (!edges.some(edge => edge.from === selectedNodes[0] && edge.to === node)) { 
+        edges.push({ from: selectedNodes[0], to: node }); saveState(); redraw(); 
+      }
+      return;
+    }
+
+    if (!e.ctrlKey && !selectedNodes.includes(node)) {
+      selectedNodes.forEach(n => n.el.classList.remove("selected"));
+      selectedNodes = [node];
+    } else if (e.ctrlKey) {
+      if (selectedNodes.includes(node)) {
+        node.el.classList.remove("selected");
+        selectedNodes = selectedNodes.filter(n => n !== node);
+      } else {
+        selectedNodes.push(node);
+      }
+    }
+    selectedNodes.forEach(n => n.el.classList.add("selected"));
+    updateToolbar();
+    dragging = true;
+    startOffsets = selectedNodes.map(n => ({ node: n, ox: e.pageX - n.el.offsetLeft, oy: e.pageY - n.el.offsetTop }));
+  });
+
+  div.addEventListener("contextmenu", e => {
+    if (e.altKey) return;
+    e.preventDefault(); e.stopPropagation();
+    menuTargetNode = node;
+    contextMenu.style.display = "block";
+    contextMenu.style.left = e.pageX + "px"; contextMenu.style.top = e.pageY + "px";
+  });
+
+  div.addEventListener("mouseup", () => { if(dragging) saveState(); dragging = false; });
+  div.addEventListener("dblclick", e => { e.stopPropagation(); div.contentEditable = true; div.innerText = div.dataset.rawText; div.focus(); });
+  div.addEventListener("blur", () => { 
+    div.contentEditable = false; 
+    div.dataset.rawText = div.innerText; 
+    div.innerHTML = marked.parse(div.innerText); 
+    saveState(); 
+  });
+
+  document.addEventListener("mousemove", e => {
+    if (!dragging) return;
+    startOffsets.forEach(o => { o.node.el.style.left = (e.pageX - o.ox) + "px"; o.node.el.style.top = (e.pageY - o.oy) + "px"; });
+    redraw();
+  });
+
+  if (shouldSave) saveState();
+  return node;
+}
+
+function toggleWordMode() {
+  if (!menuTargetNode) return;
+  const isWord = menuTargetNode.el.classList.toggle("word-mode");
+  if (isWord) {
+    menuTargetNode.el.style.width = "auto"; menuTargetNode.el.style.height = "auto";
+  } else {
+    menuTargetNode.el.style.width = "180px"; menuTargetNode.el.style.height = "100px";
+  }
+  saveState(); contextMenu.style.display = "none";
+}
+
+function startFontSizeChange(dir) {
+  const change = () => {
+    if (!menuTargetNode) return;
+    let current = parseFloat(menuTargetNode.el.style.fontSize) || 14;
+    current = Math.min(300, Math.max(8, current + dir));
+    menuTargetNode.el.style.fontSize = current + "px";
+  };
+  change(); sizeInterval = setInterval(change, 50);
+}
+
+function stopFontSizeChange() { clearInterval(sizeInterval); saveState(); }
+
+function deleteSelectedNodes() { [...selectedNodes].forEach(n => deleteNode(n)); contextMenu.style.display = "none"; }
+
+document.addEventListener("click", e => { if (!contextMenu.contains(e.target)) contextMenu.style.display = "none"; });
+
+function redraw() {
+  svg.innerHTML = "";
+  edges.forEach(edge => {
+    const nx1 = parseInt(edge.from.el.style.left), ny1 = parseInt(edge.from.el.style.top), nw1 = edge.from.el.offsetWidth, nh1 = edge.from.el.offsetHeight;
+    const nx2 = parseInt(edge.to.el.style.left), ny2 = parseInt(edge.to.el.style.top), nw2 = edge.to.el.offsetWidth, nh2 = edge.to.el.offsetHeight;
+    const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    line.setAttribute("x1", nx1 + nw1/2); line.setAttribute("y1", ny1 + nh1/2);
+    line.setAttribute("x2", nx2 + nw2/2); line.setAttribute("y2", ny2 + nh2/2);
+    line.setAttribute("stroke", "#555"); line.setAttribute("stroke-width", "1.5");
+    svg.appendChild(line);
+  });
+}
+
+function deleteNode(node) {
+  edges = edges.filter(e => e.from !== node && e.to !== node);
+  node.el.remove(); nodes = nodes.filter(n => n !== node);
+  selectedNodes = selectedNodes.filter(n => n !== node);
+  saveState(); redraw(); updateToolbar();
+}
+
+function alignNodes(type) {
+  if (selectedNodes.length < 2) return;
+  const rects = selectedNodes.map(n => ({ n, r: n.el.getBoundingClientRect() }));
+  if (type === 'dist-h' || type === 'dist-v') {
+    if (type === 'dist-h') {
+        rects.sort((a, b) => a.r.left - b.r.left);
+        const first = rects[0].r.left, last = rects[rects.length - 1].r.left, gap = (last - first) / (rects.length - 1);
+        rects.forEach((obj, i) => obj.n.el.style.left = (parseInt(obj.n.el.style.left) + (first + i * gap - obj.r.left)) + "px");
+    } else {
+        rects.sort((a, b) => a.r.top - b.r.top);
+        const first = rects[0].r.top, last = rects[rects.length - 1].r.top, gap = (last - first) / (rects.length - 1);
+        rects.forEach((obj, i) => obj.n.el.style.top = (parseInt(obj.n.el.style.top) + (first + i * gap - obj.r.top)) + "px");
+    }
+  } else {
+    const lefts = rects.map(o => o.r.left), tops = rects.map(o => o.r.top), rights = rects.map(o => o.r.right), bottoms = rects.map(o => o.r.bottom);
+    selectedNodes.forEach(n => {
+      const r = n.el.getBoundingClientRect();
+      if (type === 'left') n.el.style.left = (parseInt(n.el.style.left) + (Math.min(...lefts) - r.left)) + "px";
+      if (type === 'right') n.el.style.left = (parseInt(n.el.style.left) + (Math.max(...rights) - r.right)) + "px";
+      if (type === 'center-h') n.el.style.left = (parseInt(n.el.style.left) + ((Math.min(...lefts) + Math.max(...rights))/2 - (r.left + r.width/2))) + "px";
+      if (type === 'top') n.el.style.top = (parseInt(n.el.style.top) + (Math.min(...tops) - r.top)) + "px";
+      if (type === 'bottom') n.el.style.top = (parseInt(n.el.style.top) + (Math.max(...bottoms) - r.bottom)) + "px";
+      if (type === 'center-v') n.el.style.top = (parseInt(n.el.style.top) + ((Math.min(...tops) + Math.max(...bottoms))/2 - (r.top + r.height/2))) + "px";
+    });
+  }
+  saveState(); redraw();
+}
+
+function updateToolbar() { toolbar.style.display = selectedNodes.length >= 2 ? "block" : "none"; }
+
+function exportAsImage() {
+  if (nodes.length === 0) return;
+  const rects = nodes.map(n => n.el.getBoundingClientRect());
+  const minX = Math.min(...rects.map(r => r.left)), minY = Math.min(...rects.map(r => r.top));
+  const maxX = Math.max(...rects.map(r => r.right)), maxY = Math.max(...rects.map(r => r.bottom));
+  const width = (maxX - minX) + 100, height = (maxY - minY) + 100;
+  const adjustX = minX - 50, adjustY = minY - 50;
+  const canvasEl = document.createElement("canvas"); canvasEl.width = width; canvasEl.height = height;
+  const ctx = canvasEl.getContext("2d"); ctx.fillStyle = "#111"; ctx.fillRect(0, 0, width, height);
+  ctx.strokeStyle = "#555"; ctx.lineWidth = 2;
+  edges.forEach(edge => {
+    const r1 = edge.from.el.getBoundingClientRect(), r2 = edge.to.el.getBoundingClientRect();
+    ctx.beginPath(); ctx.moveTo(r1.left + r1.width / 2 - adjustX, r1.top + r1.height / 2 - adjustY);
+    ctx.lineTo(r2.left + r2.width / 2 - adjustX, r2.top + r2.height / 2 - adjustY); ctx.stroke();
+  });
+  nodes.forEach(node => {
+    const r = node.el.getBoundingClientRect(); const x = r.left - adjustX, y = r.top - adjustY;
+    ctx.fillStyle = "#222"; ctx.beginPath(); ctx.roundRect(x, y, r.width, r.height, 2); ctx.fill();
+    ctx.fillStyle = "#fff"; ctx.font = (node.el.style.fontSize || "14px") + " sans-serif";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(node.el.innerText, x + r.width/2, y + r.height/2);
+  });
+  const link = document.createElement("a"); link.download = "map.png"; link.href = canvasEl.toDataURL("image/png"); link.click();
+}
+
+document.addEventListener("mousedown", e => {
+  if (e.target !== document.body && e.target !== svg && e.target !== canvas) return;
+  selecting = true; selX = e.pageX - offsetX; selY = e.pageY - offsetY;
+  selector.style.display = "block"; selector.style.left = selX + "px"; selector.style.top = selY + "px";
+  selector.style.width = "0px"; selector.style.height = "0px";
+  if (!e.ctrlKey) { selectedNodes.forEach(n => n.el.classList.remove("selected")); selectedNodes = []; updateToolbar(); }
+});
+
+document.addEventListener("mousemove", e => {
+  if (!selecting) return;
+  const curX = e.pageX - offsetX, curY = e.pageY - offsetY;
+  const x = Math.min(curX, selX), y = Math.min(curY, selY), w = Math.abs(curX - selX), h = Math.abs(curY - selY);
+  selector.style.left = x + "px"; selector.style.top = y + "px"; selector.style.width = w + "px"; selector.style.height = h + "px";
+  nodes.forEach(n => {
+    const nx = parseInt(n.el.style.left), ny = parseInt(n.el.style.top), nw = n.el.offsetWidth, nh = n.el.offsetHeight;
+    const overlap = !(nx + nw < x || nx > x + w || ny + nh < y || ny > y + h);
+    if (overlap && !selectedNodes.includes(n)) { n.el.classList.add("selected"); selectedNodes.push(n); }
+  });
+  updateToolbar();
+});
+
+document.addEventListener("mouseup", () => { selecting = false; selector.style.display = "none"; });
+
+document.addEventListener("keydown", e => {
+  const isEditing = selectedNodes.some(n => n.el.contentEditable === "true");
+  if (e.ctrlKey && !isEditing) {
+    if (e.key === "z") { e.preventDefault(); if (historyIndex > 0) loadState(history[--historyIndex]); }
+    if (e.key === "y") { e.preventDefault(); if (historyIndex < history.length - 1) loadState(history[++historyIndex]); }
+  }
+  if (e.key.toLowerCase() === "h" && !isEditing) { toggleHelp(); return; }
+  if (isEditing) return;
+  if (e.key === "Delete" || e.key === "Backspace") { [...selectedNodes].forEach(n => deleteNode(n)); }
+  if (selectedNodes.length === 1 && e.key.toLowerCase() === "s") {
+    const node = selectedNodes[0], nx = parseInt(node.el.style.left), ny = parseInt(node.el.style.top);
+    const newNode = createNode((e.shiftKey ? nx - 250 : nx + 250) + offsetX, ny + offsetY, "新規");
+    if(e.shiftKey) { 
+        edges.filter(edge => edge.to === node).forEach(edge => edge.to = newNode);
+        edges.push({ from: newNode, to: node }); 
+    } else { 
+        edges.filter(edge => edge.from === node).forEach(edge => edge.from = newNode);
+        edges.push({ from: node, to: newNode }); 
+    }
+    saveState(); redraw();
+  }
+});
+
+document.addEventListener("dblclick", e => { if (e.target === document.body || e.target === svg || e.target === canvas) createNode(e.pageX, e.pageY); });
+loadState(localStorage.getItem("mini_obsidian_data"));
+</script>
+</body>
+</html>
